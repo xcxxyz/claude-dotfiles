@@ -1,0 +1,7 @@
+- [cps-pet-care](cps-pet-care.md) — CPS智能宠物看护系统：ESP32仿真(Wokwi+Tinkercad) + 微信小程序
+- [tinkercad-three-end](tinkercad-three-end.md) — 三端IoT：Tinkercad + Node.js桥接 + 微信小程序 + 华为云IoTDA MQTT
+- [fdl-reproduction](fdl-reproduction.md) — CVPR 2024 FDL论文复现：频域分布损失图像增强
+- [farm-dashboard](farm-dashboard.md) — AgroSense智能农业监控面板：SVG可视化仪表盘
+- [huawei-iot-wokwi](huawei-iot-wokwi.md) — 华为云IoT Wokwi实验：ESP32 WiFi概念验证
+- [clipboard-vision](clipboard-vision.md) — 剪切板识图：截图→阿里DashScope→Qwen视觉模型描述
+- [self-optimization-baseline](self-optimization-baseline.md) — 自优化基线：6层防惯性系统配置 + 已知漏洞 + 升级待办
