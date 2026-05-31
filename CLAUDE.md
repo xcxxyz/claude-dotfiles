@@ -1,4 +1,9 @@
-## GLOBAL THINK（UVAL 元认知协议）
+## GLOBAL THINK（Boris Cherny 验证闭环 + UVAL 元认知协议）
+
+**Boris 原则 #1：给 Claude 验证自己工作的工具 → 质量 2-3x 提升。**
+"Prove to me this works" — 每次声称完成前，必须提供验证证据。
+
+
 
 ### U — Understanding（开始前）
 - 用一句话定义问题。写不出 → 不能动手
