@@ -6,8 +6,7 @@ tool = data.get('tool_name', '')
 ti = data.get('tool_input', {})
 
 STATE_FILE = os.path.expanduser('~/.claude/edit-guard-state.json')
-WARN_AT, BLOCK_AT, WINDOW = 2, 4, 300  # 单个文件阈值
-SCOPE_WARN, SCOPE_BLOCK = 2, 3  # 不同文件数量阈值
+WARN_AT, BLOCK_AT, WINDOW = 2, 4, 300  # 同文件阈值
 
 def load_state():
     try:
@@ -66,26 +65,4 @@ if c > WARN_AT:
         }
     }))
 
-# === 检查 2: 大范围改动 → 强制 challenger review ===
-unique_files = len([k for k in state if not k.startswith('bash:')])
-if unique_files >= SCOPE_BLOCK:
-    print(json.dumps({
-        "decision": "block",
-        "reason": (
-            f"HARD BLOCK: 你已涉及 {unique_files} 个不同文件。\n"
-            "按照全局 CLAUDE.md: 涉及 ≥3 个文件的改动必须先 spawn challenger agent 审查。\n"
-            "在审查通过之前，不得继续修改代码。"
-        )
-    }))
-    sys.exit(0)
-
-if unique_files >= SCOPE_WARN:
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "additionalContext": (
-                f"WARNING: 已涉及 {unique_files} 个文件。"
-                "达到 {SCOPE_BLOCK} 个文件阈值前先 spawn challenger 审查方案。"
-            )
-        }
-    }))
+# scope check removed: cross-task files triggered false positives
