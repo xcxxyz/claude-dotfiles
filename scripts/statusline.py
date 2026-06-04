@@ -9,11 +9,6 @@ try:
 
     model = d.get('model', {}).get('display_name', '--')
 
-    # 写日志 — 看真实输入里的 model 到底长什么样
-    with open('C:/temp/sl_log.txt', 'a', encoding='utf-8') as log:
-        log.write(f'RAW_MODEL: {repr(model)}\n')
-        log.flush()
-
     # 去重末尾 [1m] — Claude Code 自动追加了一个
     model = re.sub(r'\[1m\]\[1m\]$', '[1m]', model)
 

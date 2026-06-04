@@ -1,38 +1,51 @@
-"""SessionStart: 全量修复被 CC Switch 清掉的 settings（从备份恢复）"""
-import json, os
+"""SessionStart: 从备份恢复被 CC Switch 清掉的 settings"""
+import json, os, sys
 
 SETTINGS = os.path.expanduser('~/.claude/settings.json')
 BACKUP = os.path.expanduser('~/.claude/settings-repair-backup.json')
+LOG = os.path.expanduser('~/.claude/hook-repair.log')
+
+def log(msg):
+    try:
+        with open(LOG, 'a', encoding='utf-8') as f:
+            f.write(f'[{__import__("time").strftime("%Y-%m-%d %H:%M:%S")}] {msg}\n')
+    except: pass
 
 def has_full_config(d):
+    """验证 hooks 存在且有实质内容"""
     hooks = d.get('hooks', {})
-    return (
-        'statusLine' in d
-        and all(k in hooks for k in ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop', 'PreCompact'])
-    )
+    required = ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop', 'PreCompact']
+    if 'statusLine' not in d:
+        return False
+    for k in required:
+        v = hooks.get(k)
+        if not v or not isinstance(v, list) or len(v) == 0:
+            return False
+    return True
 
 try:
-    d = json.load(open(SETTINGS, encoding='utf-8'))
+    with open(SETTINGS, encoding='utf-8') as f:
+        current = json.load(f)
 
-    if has_full_config(d):
-        # 完好 → 更新备份（不含 env，保留 CC Switch 管理的部分）
-        backup = {k: v for k, v in d.items()
+    if has_full_config(current):
+        # 完好 → 更新备份
+        backup = {k: v for k, v in current.items()
                   if k not in ('env', 'includeCoAuthoredBy')}
-        os.makedirs(os.path.dirname(BACKUP), exist_ok=True)
-        json.dump(backup, open(BACKUP, 'w', encoding='utf-8'), indent=2, ensure_ascii=False)
+        with open(BACKUP, 'w', encoding='utf-8') as f:
+            json.dump(backup, f, indent=2, ensure_ascii=False)
     else:
-        # 被洗掉 → 恢复
+        # 损坏 → 恢复
         if os.path.exists(BACKUP):
-            backup = json.load(open(BACKUP, encoding='utf-8'))
-            # 保留 env 和 includeCoAuthoredBy（CC Switch 管理的）
-            env = d.get('env', {})
-            coauth = d.get('includeCoAuthoredBy', False)
-            d.update(backup)
-            d['env'] = env
-            d['includeCoAuthoredBy'] = coauth
-            json.dump(d, open(SETTINGS, 'w', encoding='utf-8'), indent=2, ensure_ascii=False)
-            print(json.dumps({
-                "systemMessage": "Settings auto-restored. statusLine + all hooks recovered."
-            }))
-except:
-    pass
+            with open(BACKUP, encoding='utf-8') as f:
+                backup = json.load(f)
+            env = current.get('env', {})
+            coauth = current.get('includeCoAuthoredBy', False)
+            current.update(backup)
+            current['env'] = env
+            current['includeCoAuthoredBy'] = coauth
+            with open(SETTINGS, 'w', encoding='utf-8') as f:
+                json.dump(current, f, indent=2, ensure_ascii=False)
+            log('Settings restored from backup')
+            print(json.dumps({"systemMessage": "Settings auto-restored."}))
+except Exception as e:
+    log(f'Error: {e}')
