@@ -1,99 +1,19 @@
-## GLOBAL THINK（Boris Cherny 验证闭环 + UVAL 元认知协议）
+## 图片处理规范
+禁止使用 `read` 工具读取任何图片文件（如 .png, .jpg, .jpeg）
+强制使用 image-analysis 这个 skill 来读取图片
+当模型返回不支持直接读取图片时，自动调用 image-analysis 这个 skill 来读取图片
 
-**Boris 原则 #1：给 Claude 验证自己工作的工具 → 质量 2-3x 提升。**
-"Prove to me this works" — 每次声称完成前，必须提供验证证据。
+## 编辑限制（最高优先级）
+**禁止使用 Write 工具重写 settings.json。**
+只能使用 Edit 工具修改 settings.json 的单个字段。
+API key 已隔离到 settings.local.json，Write settings.json 不会覆盖 API key，但可能触发 Cursor 代理接管。
+违反此规则 → 用户需要重新登录。
 
-
-
-### U — Understanding（开始前）
-- 用一句话定义问题。写不出 → 不能动手
-- 列出 ≥3 个当前假设，标注 `[已验证]` 或 `[猜测]`。`[猜测]` 先验证
-
-### V — Validation（进行中）
-- 每段代码生成后解释给同事听——解释不清 → 代码有问题
-- 每完成一步 → 一句话总结 `已完成 / 已验证 / 待完成`
-
-### A — Application（进行中）
-- 至少主动修改一个方面，不只复制粘贴
-- 思绪混乱 → 只保留 3 锚点：`问题 / 根因 / 方案`
-
-### L — Learning（完成后）
-- 捕捉**一个**关键洞察写入 memory（One-Thing Rule）
-- 资深工程师会批吗？有更简单方案吗？测试跳过≠通过。Fail loud。
-
-### 疲劳检查
-- 同一问题改了 2 轮以上 → STOP，不继续。`/clear` 重置或搜索文档
-- 方案 ≥3 文件 → 先 spawn challenger
-
----
-
-## 搜索时机（Search-First Workflow）
-
-**RETRIEVE → READ → SEARCH → ACT**。跳跃到 ACT 则拦截。
-
-以下情况必须搜索（使用 deep-search Skill 或直接跑 deep-search.py）：
-- 从未接触过的工具/库/配置格式 → 先搜文档
-- 用户质疑方案合理性 → 先搜验证，不辩护
-- 声称"最优/最好/完成"之前 → 先搜对比
-- 同一问题换 ≥2 个方案还没解决 → 搜 `[工具名] [症状]`
-- 需要搜多个方面 → 并行发多个搜索（不同关键词/角度）
-
-注：内置 WebSearch 已被 search-guard hook 拦截。使用自部署 SearXNG 深度搜索系统。
-
----
-
-## HARD GATE（最高优先级）
-
-**[权威] IETF Asimov 安全架构 §3.4 + perfecxion.ai Claude Code 纵深防御分析：** 规则列表必须有明确优先级。**本文件优先级：** HARD GATE > 调试协议 > 核心约束 > 沟通规则 > Token 效率。冲突时高优先级覆盖低优先级。
-
-
-
-**正确流程：** 验证假设 → 确定根因 → 修复。跳跃到修复则拦截。
-
-在任何改动之前，先输出：`ROOT CAUSE: [一句话]`
-含"可能/大概/或许/likely/possibly/I'd guess" → 根因未确定 → 不动代码。
-≥3 文件或 >20 行的改动 → 必须先 spawn challenger 审查。
-
-**不行动也是成功。** 问题不存在或假设被证伪，走开就是正确。
-
----
-
-## Token 效率 **[权威] Boris Cherny 官方推荐**
-
-- 代码库探索用 subagent（隔离上下文，只返回摘要）— 省 40%+ 输入 token
-- 深度搜索/调研 → 并行 spawn ≥3 个 Agent（各自独立搜索不同关键词），等效一次搜几十页
-- 上下文超过 50% → 主动 `/compact`（autoCompact 自动触发）
-- `Read` 只读必要行数，不读整个文件
-
-## 沟通规则 **[权威] Karpathy + 社区验证**
-
-- 每个技术术语首次出现时给出**一句话定义**（哪怕很简单）
-- 解释顺序：**是什么 → 为什么重要 → 怎么运作**（简化版）
-- 复杂概念用**类比**，不用纯技术描述
-- 不确定对方的理解水平时**先问**，不猜
-- 正面表述：说"定义每个术语"，不说"别用术语"
-
-## 核心约束
-
-1. **不确定就问，不猜测** — 不清楚就停下来问，不默默假设
-2. **最简单的方案优先** — 不加未要求的功能/抽象/灵活性。不改没坏的代码。不改相邻代码的格式或注释
-3. **每一行改动都能追溯到用户请求** — 如果改动了请求外的代码，说明理由
-4. **Goal-driven** — 定义成功标准，循环直到验证通过。不说"修复bug"，说"写复现测试→让它通过"
-5. **一次改一处，改完验证** — 不做散弹枪式修改
-
-## 调试协议
-
-- 命令失败 → **先读完整错误输出**，不猜
-- 改两轮还不行 → **立刻停手**。先写 checkpoint 到 memory。再用 `/compact` 压缩上下文（PreCompact hook 会强制检查 memory 更新）。
-- 先排除环境/配置/版本，再考虑代码 bug
-- 空代码仍失败 = 环境问题，不继续改代码
-- 新工具先读 `readme.md`/`package.json`/配置 schema，不猜不类比
-- 停手后结构化排查：1）展示完整错误 2）展示最近改动 3）指出最可能的起因 4）提出**一个**针对性修复
-
-## 跨会话持久化
-
-**Sessions end. Files persist.**
-- 关键发现 → 立即写入 memory（路径 `~/.claude/projects/<project>/memory/`）
-- 同类问题出现 2 次 → 提取为 CLAUDE.md 规则（内置自动记忆会补充，但手动写入更可靠）
-- 规则超过 50 行或 200 行 MEMORY.md 上限 → 分裂为独立文件
-- 长任务中断前 → 写 checkpoint 到 memory，下次启动自动恢复
+## 搜索规范（最高优先级）
+**禁止使用内置 WebSearch 工具进行网页搜索。**
+所有搜索操作必须使用自部署深度搜索系统：
+```
+/d/temp/dlc-env/Scripts/python C:/temp/deep-search.py "搜索内容" [结果数]
+```
+搜索完成后：用 Read 工具读入 `C:/temp/deep_search_result.md`，再基于内容回答。
+前置条件：SearXNG Docker 容器必须运行（`docker ps` 检查 searxng）。如容器未运行，先启动后再搜索。

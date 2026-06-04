@@ -1,25 +1,23 @@
 """Claude Code statusline"""
-import sys, json, os, time, re
+import sys, json, os, time
 
-sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+sys.stdout.reconfigure(encoding='utf-8')
 
 try:
-    raw = sys.stdin.read().replace('\\', '/')
-    d = json.loads(raw)
+    raw = sys.stdin.read()
+    try:
+        d = json.loads(raw)
+    except json.JSONDecodeError:
+        d = json.loads(raw.replace('\\', '/'))
 
-    model = d.get('model', {}).get('display_name', '--')
-
-    # 去重末尾 [1m] — Claude Code 自动追加了一个
-    model = re.sub(r'\[1m\]\[1m\]$', '[1m]', model)
+    model = d.get('model', {}).get('display_name', 'DeepSeek')
+    if 'opus' in model.lower():
+        model = 'DeepSeek-v4-pro[1m]'
 
     pct = int(float(d.get('context_window', {}).get('used_percentage', 0) or 0))
-    ws = d.get('workspace', {}).get('current_dir', '')
-
-    parts = [p for p in ws.split('/') if p]
-    ws_short = '/'.join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else '--')
+    ws = d.get('workspace', {}).get('current_dir', '').replace('\\', '/')
 
     filled = pct * 10 // 100
-    # 绿色已用 + 深灰未用(256色)
     bar = '\033[42m' + ' ' * filled + '\033[0m\033[48;5;238m' + ' ' * (10 - filled) + '\033[0m'
 
     bal = '--'
@@ -27,9 +25,10 @@ try:
     if os.path.exists(cf) and time.time() - os.path.getmtime(cf) < 300:
         try:
             v = open(cf, encoding='utf-8').read().strip()
-            if v.startswith('¥'): bal = v
-        except: pass
+            bal = v
+        except:
+            pass
 
-    print(f'{ws_short} | {model} | {bar} {pct}% | {bal}')
+    print(f'{ws} | {model} | {bar} {pct}% | {bal}')
 except Exception:
     print('-- | -- | [loading] | --')

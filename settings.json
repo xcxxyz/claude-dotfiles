@@ -1,0 +1,133 @@
+{
+  "includeCoAuthoredBy": false,
+  "autoCompactEnabled": false,
+  "autoCompactWindow": 500000,
+  "statusLine": {
+    "type": "command",
+    "command": "python D:/temp/statusline.py",
+    "refreshInterval": 30,
+    "padding": 1
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python D:/temp/hook-repair.py"
+          },
+          {
+            "type": "command",
+            "command": "python D:/temp/calibrate-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python D:/temp/balance-refresh.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python D:/temp/post-edit-check.py",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python D:/temp/read-tracker.py",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python D:/temp/syntax-check.py",
+            "timeout": 8
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python D:/temp/balance-refresh.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python D:/temp/search-guard.py",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python D:/temp/edit-guard.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python D:/temp/doc-guard.py",
+	            "timeout": 5
+	          },
+	          {
+	            "type": "command",
+	            "command": "python D:/temp/settings-guard.py",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python D:/temp/read-guard.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python D:/temp/stop-check.py"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python D:/temp/precompact-check.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
