@@ -1,0 +1,37 @@
+use_default_settings: true
+search:
+  formats:
+    - html
+    - json
+  max_page: 2
+server:
+  limiter: false
+  public_instance: false
+  method: GET
+  secret_key: "W5gN9sK2mR7pX4vZ8aL3jF6dH1cY0bE"
+
+engines:
+  # 关掉垃圾引擎
+  - name: qwant
+    disabled: true
+  - name: yep
+    disabled: true
+  - name: mwmbl
+    disabled: true
+  - name: presearch
+    disabled: true
+  - name: yacy
+    disabled: true
+  # 启用可用的
+  - name: bing
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: marginalia
+    disabled: false
+  - name: baidu
+    disabled: false
+  - name: sogou
+    disabled: false
+  - name: 360search
+    disabled: false

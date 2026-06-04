@@ -1,139 +1,193 @@
-"""PostToolUse: 错误检测 + gate 管理 + HARD GATE 纪律注入"""
-import json, sys, os, time, re
+"""
+PostToolUse: 语义错误分类 + 证据链回填 + 门禁管理
+
+错误分级:
+  L0: success
+  L1: new_error (不同签名)
+  L2: same_error (同签名，不同区域)
+  L3: same_error_same_file (同签名+同文件 — fix-loop确认)
+"""
+import json, sys, os, time, re, sqlite3, hashlib
 
 data = json.load(sys.stdin)
 tool = data.get('tool_name', '')
-tool_response = data.get('tool_response', {})
+ti = data.get('tool_input', {})
+resp = data.get('tool_response', {})
 
-STATE_FILE = os.path.expanduser('~/.claude/post-edit-error-state.json')
+DB = os.path.expanduser('~/.claude/edit-guard-v2.db')
 GATE_FILE = os.path.expanduser('~/.claude/post-edit-gate.json')
-CHECKPOINT_FILE = os.path.expanduser('~/.claude/root-cause-checkpoint.md')
+CHECKPOINT = os.path.expanduser('~/.claude/root-cause-checkpoint.md')
 LOG_FILE = os.path.expanduser('~/.claude/edit-guard-log.jsonl')
-
-ERROR_PATTERNS = [
-    r'BadUserNameOrPassword', r'BadUserOrPassword', r'BadAuth',
-    r'IdReject', r'IdentifierRejected',
-    r'Connection refused', r'ConnectionRefused',
-    r'error\s*:\s*CS\d{4}', r'error\s*MSB\d{4}',
-    r'Unhandled exception', r'fatal error',
-    r'Exit code [1-9]',
-    r'FAIL:', r'FAIL\b',
-    r'失败', r'错误',
-]
+now = time.time()
 
 def log_event(action, detail=''):
     try:
         os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
         with open(LOG_FILE, 'a') as f:
-            json.dump({'ts': time.time(), 'action': action, 'detail': detail}, f)
+            json.dump({'ts': now, 'action': action, 'detail': str(detail)[:200]}, f)
             f.write('\n')
-    except:
-        pass
+    except: pass
 
-def is_error(resp):
+# ———— 语义错误签名 (修复: 归一化路径) ————
+def semantic_sig(text):
+    s = str(text)[:500]
+    # 路径归一化
+    s = re.sub(r'File "([^"]+)"', lambda m: f'File "{os.path.basename(m.group(1))}"', s)
+    s = re.sub(r'[A-Z]:/[^\s,;]+', lambda m: os.path.basename(m.group()), s)
+
+    # Python Traceback — 优先异常类型
+    m = re.search(r'(\w+(?:Error|Exception|Warning))\s*:?\s*(.+?)(?:\n|$)', s)
+    if m:
+        exc_msg = re.sub(r'0x[0-9a-fA-F]+', 'ADDR', m.group(2)[:60])
+        exc_msg = re.sub(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}', 'TS', exc_msg)
+        exc_msg = re.sub(r'\d{10,13}', 'UNIXTIME', exc_msg)
+        exc_msg = re.sub(r'\d{3,}', 'N', exc_msg)
+        return f'py:{m.group(1)}:{exc_msg}'
+
+    # Exit status
+    m = re.search(r'Exit (?:code|status)\s*(\d+)', s, re.IGNORECASE)
+    if m: return f'exit:{m.group(1)}'
+
+    # C# errors
+    m = re.search(r'(?:error|CS|MSB)\s*(\d{4,5})', s, re.IGNORECASE)
+    if m: return f'cs:{m.group(1)}'
+
+    # HTTP status (specific: 必须紧跟前缀词)
+    m = re.search(r'(?:status|HTTP/[\d.]+\s+)(\d{3})', s, re.IGNORECASE)
+    if m: return f'http:{m.group(1)}'
+
+    # Command not found
+    m = re.search(r'(\S+):\s*command not found', s, re.IGNORECASE)
+    if m: return f'cmd:{m.group(1)}'
+
+    # Permission
+    if re.search(r'permission denied', s, re.IGNORECASE): return 'perm'
+
+    # Connection
+    if re.search(r'connection\s*(refused|reset|timed?\s*out)', s, re.IGNORECASE): return 'conn'
+
+    # Docker
+    if 'docker' in s.lower() and 'error' in s.lower(): return 'docker'
+
+    # Fallback hash
+    clean = re.sub(r'\d{3,}', 'N', re.sub(r'0x[0-9a-f]+', 'H', s[:100]))
+    return f'gen:{hashlib.md5(clean.encode()).hexdigest()[:8]}'
+
+def is_real_error(resp):
+    """区分真错误和含'error'词的良性响应"""
     if resp.get('ok') or resp.get('success'):
         return False
-    if resp.get('error'):
+    err_text = str(resp.get('error', ''))
+    if err_text:
         return True
+    # 检查 exit code
     text = str(resp)
-    for pat in ERROR_PATTERNS:
-        if re.search(pat, text, re.IGNORECASE):
-            return True
+    if re.search(r'Exit (?:code|status)\s*[1-9]', text):
+        return True
+    if re.search(r'Traceback \(most recent call last\)', text):
+        return True
+    if re.search(r'\w+(?:Error|Exception):', text):
+        return True
     return False
 
-def load_state():
-    try:
-        s = json.load(open(STATE_FILE))
-        if time.time() - s.get('ts', 0) > 300:
-            return {'errors': [], 'ts': time.time()}
-        return s
-    except:
-        return {'errors': [], 'ts': time.time()}
-
-def save_state(s):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    json.dump(s, open(STATE_FILE, 'w'))
-
-# ============================================================
-# Write 到 checkpoint 文件 → 清除 gate
-# ============================================================
-ti = data.get('tool_input', {})
+# ———— Checkpoint写 → 清除gate + 恢复信念 ————
 fp = (ti.get('file_path') or ti.get('filePath') or '').replace('\\', '/')
-
-if tool == 'Write' and fp == CHECKPOINT_FILE.replace('\\', '/'):
-    log_event('gate_clear', 'checkpoint written')
+if tool == 'Write' and fp == CHECKPOINT.replace('\\', '/'):
+    log_event('gate_clear_checkpoint')
     try:
-        json.dump({'gate': False, 'ts': time.time()}, open(GATE_FILE, 'w'))
-    except:
-        pass
+        db = sqlite3.connect(DB)
+        db.execute('PRAGMA journal_mode=WAL')
+        db.execute("DELETE FROM state WHERE key='hard_gate'")
+        db.commit(); db.close()
+        json.dump({'gate': False, 'ts': now}, open(GATE_FILE, 'w'))
+    except: pass
     sys.exit(0)
 
-# ============================================================
-# 非错误 → 退出
-# ============================================================
-if not is_error(tool_response):
+if tool not in ('Edit', 'Write', 'Bash'):
     sys.exit(0)
 
-# ============================================================
-# 错误处理
-# ============================================================
-state = load_state()
-
-# 提取错误签名
-err_text = str(tool_response.get('error', tool_response))
-err_sig = re.sub(r'\d+', 'N', err_text[:120])
-state['errors'].append({'sig': err_sig, 'time': time.time()})
-state['ts'] = time.time()
-
-recent = [e for e in state['errors'] if time.time() - e['time'] < 300]
-same_count = sum(1 for e in recent if e['sig'] == err_sig)
-unique_sigs = set(e['sig'] for e in recent)
-
-# 同错误 ≥ 2 次 → 设置 gate
-if same_count >= 2:
-    log_event('gate_set', f'same_error={same_count} sig={err_sig[:60]}')
+if not is_real_error(resp):
+    # 更新 pending 为 success
     try:
-        os.makedirs(os.path.dirname(GATE_FILE), exist_ok=True)
-        json.dump({'gate': True, 'ts': time.time(), 'error': err_sig[:80]},
-                  open(GATE_FILE, 'w'))
-    except:
-        pass
+        db = sqlite3.connect(DB)
+        db.execute('PRAGMA journal_mode=WAL')
+        db.execute("UPDATE evidence SET outcome='success' WHERE outcome='pending' AND ts > ?",
+                   (now - 10,))
+        db.commit(); db.close()
+    except: pass
+    sys.exit(0)
 
-save_state(state)
+# ———— 错误处理 ————
+err_text = str(resp.get('error', resp))
+error_sig = semantic_sig(err_text)
+log_event('error', f'sig={error_sig}')
 
-# ============================================================
-# 注入纪律消息
-# ============================================================
-msg = ""
+try:
+    db = sqlite3.connect(DB)
+    db.execute('PRAGMA journal_mode=WAL')
 
-if same_count >= 3:
-    msg = (
-        f"CRITICAL: 相同错误模式 {same_count} 次（5 分钟内）。fix-loop 确认。\n\n"
-        "HARD GATE 检查清单:\n"
-        "1. ROOT CAUSE 是什么？（不含'可能/大概/或许'）\n"
-        "2. 当前假设哪些是 [已验证]，哪些是 [猜测]？\n"
-        "3. [猜测] 的先验证，不要再改代码\n"
-        "4. ≥2 轮 → 停手\n"
-        "5. 先排除环境/配置/版本，再考虑代码 bug\n\n"
-        f"请将分析写入 {CHECKPOINT_FILE} 以解除编辑限制。"
-    )
-elif same_count >= 2:
-    msg = (
-        f"WARNING: 相同错误出现了 {same_count} 次（5 分钟内）。\n"
-        "停下来检查假设。确定根因后再改代码。\n"
-        f"如需解除编辑限制，写根因分析到 {CHECKPOINT_FILE}。"
-    )
-elif len(unique_sigs) >= 2:
-    msg = (
-        f"提示: 5 分钟内出现 {len(unique_sigs)} 种不同错误。\n"
-        "可能在不相关的方向分散调试。聚焦一个错误。"
-    )
+    # 找到最近的 pending 证据 (匹配工具类型和文件路径，避免跨工具错误归因)
+    fp_norm = fp
+    zone_prefix = 'edit:' if tool == 'Edit' else ('bash:' if tool == 'Bash' else 'write:')
+    row = db.execute(
+        "SELECT id, file_path FROM evidence WHERE outcome='pending' AND tool=? ORDER BY ts DESC LIMIT 1",
+        (tool,)).fetchone()
 
-if msg:
-    log_event('inject_discipline', f'same={same_count} unique={len(unique_sigs)}')
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
-            "additionalContext": msg
-        }
-    }))
+    if not row:
+        db.close(); sys.exit(0)
+
+    evidence_id, ev_file_path = row[0], row[1]
+
+    # 检查上一次错误签名（按时间倒序，跳过当前pending行）
+    prev = db.execute(
+        "SELECT error_sig, file_path FROM evidence WHERE id < ? AND outcome NOT IN ('success','pending') ORDER BY id DESC LIMIT 1",
+        (evidence_id,)).fetchone()
+
+    if prev and prev[0] == error_sig:
+        if prev[1] == ev_file_path:
+            final_outcome = 'same_error_same_file'  # L3: 同错误+同文件
+        else:
+            final_outcome = 'same_error'  # L2: 同错误,不同文件
+    else:
+        final_outcome = 'new_error'  # L1
+
+    # 更新证据
+    db.execute("UPDATE evidence SET outcome=?, error_sig=? WHERE id=?",
+               (final_outcome, error_sig, evidence_id))
+
+    # 连续同类错误计数（真正连续，跨越success重置）
+    consecutive = 0
+    for r in db.execute(
+        "SELECT outcome, error_sig FROM evidence WHERE ts > ? ORDER BY id DESC",
+        (now - 300,)).fetchall():
+        if r[0] and 'same_error' in r[0] and r[1] == error_sig:
+            consecutive += 1
+        elif r[0] == 'success':
+            break  # success中断连续
+        elif r[0] and 'error' in r[0] and r[1] != error_sig:
+            break  # 不同错误中断连续
+        # pending: 跳过
+
+    db.commit()
+
+    # 连续2次 → 设置gate
+    if consecutive >= 2:
+        log_event('gate_set', f'consecutive={consecutive} sig={error_sig[:60]}')
+        json.dump({'gate': True, 'ts': now, 'error': error_sig[:80]}, open(GATE_FILE, 'w'))
+
+    if consecutive >= 3:
+        msg = (f"信念降级: 连续 {consecutive} 次同类错误(L{'3' if final_outcome == 'same_error_same_file' else '2'})。\n"
+               f"根因假设是什么？[已验证]还是[猜测]？写根因分析到 {CHECKPOINT}。")
+    elif consecutive >= 2:
+        msg = f"同类错误 {consecutive} 次。停下来检查根因。"
+    else:
+        msg = f"新错误: {error_sig[:80]}。"
+
+    if msg:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse",
+            "additionalContext": msg}}))
+
+    db.close()
+
+except Exception as e:
+    log_event('db_error', str(e)[:100])
